@@ -291,11 +291,9 @@ This pipeline was originally developed as a term project for the **CIT672: Progr
 
 **Project Topic:** *Differentially Expressed Genes (DEG) Analysis for Lung Cancer and Gene Ontology (GO) Enrichment*
 
-Thank you to everyone in the group for their collaboration, dedication, and shared efforts throughout this project. 
+`Thank you to everyone in the group for their collaboration, dedication, and shared efforts throughout this project.` 
 
 A special thanks to our course instructor, **Dr. Ibrahim Mohamed Youssef**, for his invaluable guidance, effort, and support.
-
-*Note: This repository represents the production-ready, fully vectorized, and optimized command-line iteration of the pipeline, engineered to scale efficiently with high-throughput genomic datasets.*
 
 ---
 ## License
