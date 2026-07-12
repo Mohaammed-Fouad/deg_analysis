@@ -21,6 +21,7 @@ The pipeline takes a gene-expression matrix and a sample metadata file as input 
 - [Output Files](#output-files)
 - [Troubleshooting](#troubleshooting)
 - [Notes and Limitations](#notes-and-limitations)
+- [Acknowledgments](#acknowledgements)
 - [License](#license)
 
 ---
