@@ -1,10 +1,10 @@
-# DEG Analysis CLI
+# DEG Analysis
 
-A command-line pipeline that identifies **Differentially Expressed Genes (DEGs)** between a diseased sample group and a healthy/control sample group from a gene-expression matrix, then characterizes those DEGs through co-expression analysis and Gene Ontology (GO) enrichment.
+A command-line pipeline that identifies **differentially expressed genes (DEGs)** between a diseased group and a healthy group from a gene-expression matrix, originally built around a **lung cancer** dataset, but not limited to it: any two-group expression matrix with matching sample metadata works.
 
-The pipeline takes a gene-expression matrix and a sample metadata file as input (e.g. a tumor-vs-normal microarray or RNA-seq dataset such as GSE19804), computes fold change and statistical significance for every gene from scratch with NumPy/SciPy (no package infers the DEGs for you), corrects for multiple testing, draws a volcano plot, and reports up- and down-regulated genes together with their co-expression partners and enriched biological functions.
+The pipeline computes fold change and Welch's t-test statistics per gene (no DEG-calling package used, only NumPy/SciPy), applies Benjamini-Hochberg multiple-testing correction implemented from scratch, classifies every gene, draws a volcano plot, runs a co-expression analysis between up- and down-regulated genes, and runs GO Biological Process enrichment via Enrichr, all from a single non-interactive command.
 
-> **Note:** there is no default disease/control dataset bundled with this tool. You must always point it at your own `--metadata` and `--expression` files.
+> **Note:** GO enrichment (Enrichr) matches genes by *gene symbol*, not by *probe/feature ID*. If your expression matrix is indexed by probe IDs (e.g. Affymetrix `1007_s_at`), use `--id-map` to translate to gene symbols first, see [A note on gene identifiers and GO enrichment](#a-note-on-gene-identifiers-and-go-enrichment) below.
 
 ---
 
@@ -14,30 +14,32 @@ The pipeline takes a gene-expression matrix and a sample metadata file as input 
 - [How It Works](#how-it-works)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Input File Formats](#input-file-formats)
 - [Usage](#usage)
-- [Statistical Methodology](#statistical-methodology)
+  - [A note on gene identifiers and GO enrichment](#a-note-on-gene-identifiers-and-go-enrichment)
+  - [All available options](#all-available-options)
 - [Project Structure](#project-structure)
 - [Output Files](#output-files)
-- [Troubleshooting](#troubleshooting)
+- [Example Run](#example-run)
 - [Notes and Limitations](#notes-and-limitations)
-- [Acknowledgments](#acknowledgements)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ---
 
 ## Overview
 
-Given a gene-expression matrix and a metadata file labeling each sample as diseased or healthy, the pipeline:
+Given a gene-expression matrix and a sample metadata file that labels each sample as diseased or healthy, the pipeline:
 
-1. **Loads** the expression matrix and metadata, and splits the matrix into a disease-group sub-matrix and a healthy-group sub-matrix based on the labels you specify.
-2. **Computes per-gene statistics** - log2 fold change and a Welch's t-test (statistic + p-value) for every gene, fully vectorized across the whole matrix at once rather than looping gene by gene.
-3. **Adjusts p-values** for multiple testing using a from-scratch, vectorized implementation of the Benjamini-Hochberg (FDR) procedure - no external multiple-testing package is used.
-4. **Classifies** every gene as `over-expressed`, `down-expressed`, or `equally-expressed` against configurable fold-change and adjusted-p-value cutoffs.
-5. **Draws a volcano plot** (fold change vs. -log10 adjusted p-value) with matplotlib.
-6. **Saves a DEG report** - one line per gene: name, fold change, p-value, adjusted p-value, t-statistic, and change type.
-7. **Runs a co-expression analysis** between every up-regulated and down-regulated gene (Pearson correlation on the diseased samples), reporting statistically significant positive ("similar") and negative ("different") pairs, ranked by correlation strength.
-8. **Runs GO Biological Process enrichment** (via `gseapy`/Enrichr) separately for the up-regulated genes, the down-regulated genes, and all DEGs together, so you can compare which biological functions each subset is enriched for.
+1. **Loads and splits** the expression matrix into disease / healthy groups. Optionally maps probe/feature IDs to gene symbols via `--id-map`, since GO enrichment only matches on gene symbols.
+2. **Computes** log2 fold change, Welch's t-test statistic, and p-value for every gene, fully vectorized across all genes at once.
+3. **Adjusts p-values** for multiple testing with the Benjamini-Hochberg procedure, implemented from scratch with NumPy.
+4. **Classifies** every gene as over-expressed, down-expressed, or equally-expressed.
+5. **Draws** a volcano plot (fold change vs. -log10 adjusted p-value).
+6. **Saves** a tab-separated DEG report (gene, fold_change, p_value, adj_p_value, t_stat, change_type).
+7. **Runs a co-expression analysis** between every up-regulated gene and every down-regulated gene (Pearson correlation on the diseased samples), reporting statistically significant similar (positive) and different (negative) pairs, ranked by correlation.
+8. **Runs GO Biological Process enrichment** (via `gseapy`/Enrichr) separately for the up-regulated genes, the down-regulated genes, and all DEGs together.
+
+This is a straight command-line port of the original Jupyter-notebook prototype: the statistics, the BH correction, the classification rules, the volcano-plot mechanics, and the co-expression logic are all unchanged. What changed is packaging: everything now lives in importable functions driven by a proper CLI (`argparse`) with a `main()` entry point, so the whole pipeline can be run non-interactively, with logging and configurable parameters, instead of by hand cell-by-cell.
 
 ---
 
@@ -45,33 +47,47 @@ Given a gene-expression matrix and a metadata file labeling each sample as disea
 
 | Stage | Description | Key Library |
 |---|---|---|
-| Data loading | Read metadata + expression matrix, split into disease/healthy sub-matrices by sample group | `pandas` |
-| Per-gene statistics | Vectorized log2 fold change and Welch's t-test across every gene at once | `numpy`, `scipy.stats` |
-| Multiple-testing correction | Vectorized Benjamini-Hochberg FDR adjustment (`argsort` / `minimum.accumulate` / `clip`) | `numpy` |
-| Classification | Label genes over-/down-/equally-expressed via cutoffs (`np.select`) | `numpy` |
-| Volcano plot | Fold change vs. -log10 adjusted p-value, color-coded by change type | `matplotlib` |
-| DEG report | Tab-separated report of every gene's stats and call | `pandas` |
-| Co-expression analysis | Up-vs-down gene correlation matrix (`np.corrcoef`) with analytic p-values from the t-distribution | `numpy`, `scipy.stats` |
-| GO enrichment | Enrichr GO Biological Process enrichment for up-only, down-only, and all DEGs | `gseapy` |
+| Data loading | Load metadata + expression matrix, split into disease/healthy groups, optionally map probe IDs to gene symbols | `pandas` |
+| Fold change + t-test | Compute log2 fold change and Welch's t-test statistic/p-value for every gene at once (vectorized) | `numpy`, `scipy` |
+| Multiple-testing correction | Benjamini-Hochberg FDR adjustment, implemented from scratch | `numpy` |
+| Classification | Label each gene over-/down-/equally-expressed by fold-change and adjusted-p cutoffs | `numpy` |
+| Volcano plot | Fold change vs. -log10 adjusted p-value, colored by classification | `matplotlib` |
+| DEG report | Tab-separated report of every gene's stats and classification | `pandas` |
+| Co-expression analysis | Pearson correlation between every up-gene/down-gene pair, computed as one correlation matrix | `numpy`, `scipy` |
+| GO enrichment | Enrichr GO Biological Process enrichment for up, down, and all DEGs | `gseapy` |
 
 ---
 
 ## Requirements
 
 - **Python 3.9+**
-- An internet connection for the GO enrichment step (it calls the public Enrichr API) - pass `--skip-go` to run fully offline.
+- An internet connection (for the GO enrichment step, unless `--skip-go` is used).
 
-Everything else - data loading, statistics, plotting, co-expression - runs locally with no external services.
+Install everything with a single command:
+
+```bash
+pip install -r requirements.txt
+```
+
+`requirements.txt`:
+
+```
+numpy>=1.23
+pandas>=1.5
+scipy>=1.9
+matplotlib>=3.6
+gseapy>=1.0
+```
 
 ---
 
 ## Installation
 
-1. **Clone the repository** (or just download `deg_analysis.py`):
+1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/Mohaammed-Fouad/deg_analysis.git
-   cd deg_analysis
+   git clone https://github.com/Mohaammed-Fouad/deg-analysis.git
+   cd deg-analysis
    ```
 
 2. **(Recommended) Create a virtual environment:**
@@ -82,7 +98,7 @@ Everything else - data loading, statistics, plotting, co-expression - runs local
    venv\Scripts\activate      # Windows PowerShell
    ```
 
-3. **Install all dependencies with a single command:**
+3. **Install all dependencies:**
 
    ```bash
    pip install -r requirements.txt
@@ -90,88 +106,35 @@ Everything else - data loading, statistics, plotting, co-expression - runs local
 
 ---
 
-## Input File Formats
-
-**Expression matrix** (`--expression`): CSV with genes as rows and samples as columns. The first column must be the gene name/ID (used as the row index).
-
-| gene | T1 | T2 | N1 | N2 |
-|--------|------|------|------|------|
-| GENE1 | 8.21 | 7.98 | 5.10 | 5.32 |
-| GENE2 | 4.55 | 4.61 | 4.50 | 4.48 |
-
-**Sample metadata** (`--metadata`): CSV mapping each sample ID to a condition/group label.
-
-| sample_accession | group |
-|-------------------|--------|
-| T1 | tumor |
-| T2 | tumor |
-| N1 | normal |
-| N2 | normal |
-
-Column names and label values don't have to match this example - point the script at whatever columns/labels your files actually use with `--sample-col`, `--group-col`, `--disease-label`, and `--healthy-label`.
-
-### A note on gene identifiers and GO enrichment
-
-GO enrichment (`gseapy`/Enrichr) matches submitted genes by **gene symbol** (e.g. `TP53`, `EGFR`). Many microarray platforms - including the Affymetrix arrays commonly used for datasets like GSE19804 - index their expression matrix by **probe/feature ID** instead (e.g. `1007_s_at`), not gene symbol. Submitting probe IDs to Enrichr doesn't raise an error; it just silently returns **0 annotations** for every gene list, because none of the IDs match anything in Enrichr's gene sets.
-
-The script detects this automatically: if you don't pass `--id-map` and the gene index looks like Affymetrix-style probe IDs, it logs a warning up front. If a GO enrichment call still comes back with 0 annotations, it's also flagged explicitly in the log rather than reported as a plain "Success."
-
-**To fix it, map probes to gene symbols before running the pipeline** with `--id-map`:
-
-```bash
-python deg_analysis.py --metadata meta.csv --expression expr.csv --id-map GPL570-55999.txt --id-map-id-col ID --id-map-symbol-col "Gene Symbol"
-```
-
-`--id-map` accepts any CSV/TSV with an ID column and a gene-symbol column - a GEO platform annotation file (e.g. `GPLxxxx-yyyyy.txt`, downloadable from the platform's page on [GEO](https://www.ncbi.nlm.nih.gov/geo/)) works directly, since many Affymetrix platform files already use `ID` and `Gene Symbol` as column headers (the tool's defaults). Probes with no symbol are dropped, and multiple probes mapping to the same gene symbol are collapsed into one row via `--id-map-agg` (`mean` by default; `median`/`max` also available).
-
-### Getting and cleaning a GPL annotation file (common pitfalls)
-
-Datasets like GSE19804 don't ship a ready-made ID-to-symbol file - you have to pull one from GEO yourself, and the file GEO gives you usually isn't clean enough to load right away. Two problems come up in practice:
-
-**1. You don't already have an `--id-map` file - it isn't part of the expression matrix.**
-It's tempting to point `--id-map` at your `*_expression_matrix.csv`, since it also has an "ID" column (`ID_REF`) - but that file only has probe IDs and per-sample expression values, never gene symbols. `--id-map` must be a *separate* file: the annotation table for the microarray **platform** the samples were run on, not the samples themselves.
-
-To find it:
-- Open the series page for your dataset on GEO (e.g. `GSE19804`) and note its platform ID (GSE19804 uses **GPL570**, the Affymetrix Human Genome U133 Plus 2.0 Array).
-- Go to that platform's GEO page (`GPLxxxx`) and download its annotation table - GEO also mirrors these as plain files named like `GPL570-55999.txt`.
-- Confirm the file has an ID column (probe IDs like `1007_s_at`) and a gene-symbol column (`Gene Symbol`) before use.
-
-**2. The downloaded file often won't parse as-is.**
-GEO platform annotation files are typically full tab-separated tables, but they:
-- Start with several `#`-prefixed header/comment lines describing each column, *before* the real header row - these need to be stripped, or `pandas` will misread the whole file.
-- Contain gene descriptions with embedded quotes, commas, and parentheses (e.g. multiple gene symbols separated by `///`) that can confuse a generic delimiter-autodetection parser and raise errors like `' ' expected after '"'`.
-
-If you hit that error, open the file in a text editor first, count how many `#` lines precede the real header row, and strip them before passing it to `--id-map`, e.g. (PowerShell):
-
-```powershell
-Get-Content GPL570-55999.txt | Select-Object -Skip 16 | Set-Content GPL570_clean.txt
-```
-
-(replace `16` with however many comment lines your copy actually has), then run with `--id-map GPL570_clean.txt` instead of the raw download.
-
----
-
 ## Usage
 
-### 1. Run the full pipeline
+### 1. Run the pipeline with default settings
 
 ```bash
 python deg_analysis.py --metadata meta.csv --expression expr.csv --outdir results
 ```
 
-This loads the data, computes DEG statistics, saves the volcano plot and DEG report, runs the co-expression analysis, and - unless `--skip-go` is set - queries the Enrichr API for GO enrichment. The GO step can take a little while (a few seconds per gene list plus a short pause between calls), so budget for that on top of the rest, which typically finishes in seconds even on large matrices thanks to the vectorized statistics.
+`--metadata` and `--expression` are always required. By default, samples are split using `group` column values `tumor` (disease) and `normal` (healthy).
 
-### 2. Customize column names, labels, and cutoffs
-
-```bash
-python deg_analysis.py --metadata meta.csv --expression expr.csv --sample-col sample_id --group-col condition --disease-label cancer --healthy-label control --fc-cutoff 1.0 --pval-cutoff 0.05 --corr-pval-cutoff 0.05 --outdir results
-```
-
-### 3. Run offline (skip GO enrichment)
+### 2. Customize group labels and DEG thresholds
 
 ```bash
-python deg_analysis.py --metadata meta.csv --expression expr.csv --skip-go
+python deg_analysis.py --metadata meta.csv --expression expr.csv --disease-label tumor --healthy-label normal --fc-cutoff 1.0 --pval-cutoff 0.05 --skip-go
 ```
+
+`--skip-go` is useful when running offline or when the GO enrichment step isn't needed.
+
+### 3. Map probe IDs to gene symbols before GO enrichment
+
+```bash
+python deg_analysis.py --metadata meta.csv --expression expr.csv --id-map GPL570-55999.txt --id-map-id-col ID --id-map-symbol-col "Gene Symbol"
+```
+
+### A note on gene identifiers and GO enrichment
+
+Enrichr (used for the GO enrichment step) matches submitted genes by *gene symbol* (e.g. `TP53`, `EGFR`). Many microarray expression matrices are indexed by *probe/feature ID* instead (e.g. Affymetrix IDs like `1007_s_at`), which will never match anything in Enrichr's gene sets. **This fails silently:** the API call still "succeeds," it just returns an empty results table (0 annotations) for every gene list.
+
+If your gene index looks like probe IDs, use `--id-map` to supply a CSV that maps each probe/feature ID to its gene symbol, e.g. a GEO platform annotation file, which for many Affymetrix platforms already uses `ID` and `Gene Symbol` as column names, the defaults for `--id-map-id-col` / `--id-map-symbol-col`. The script also logs a warning if it detects Affymetrix-style probe IDs and no `--id-map` was given.
 
 ### All available options
 
@@ -179,40 +142,44 @@ python deg_analysis.py --metadata meta.csv --expression expr.csv --skip-go
 python deg_analysis.py --help
 ```
 
+**Input files**
+
 | Flag | Description | Default |
 |---|---|---|
-| `--metadata` | CSV file with sample metadata (sample IDs + group labels). **Required** | N/A |
-| `--expression` | CSV file with the gene expression matrix (genes as rows, samples as columns). **Required** | N/A |
-| `--sample-col` | Metadata column holding sample IDs | `sample_accession` |
-| `--group-col` | Metadata column holding the condition label | `group` |
-| `--disease-label` | Value in `--group-col` marking a diseased sample | `tumor` |
-| `--healthy-label` | Value in `--group-col` marking a healthy/control sample | `normal` |
-| `--id-map` | CSV/TSV mapping probe/feature IDs to gene symbols (e.g. a GEO platform annotation file) | none |
+| `--metadata` | CSV file with sample metadata (sample IDs + group labels) | **required** |
+| `--expression` | CSV file with the gene expression matrix (genes as rows, samples as columns; first column = gene name) | **required** |
+| `--sample-col` | Column in the metadata file holding sample IDs | `sample_accession` |
+| `--group-col` | Column in the metadata file holding the condition label | `group` |
+| `--disease-label` | Value in `--group-col` that marks a diseased sample | `tumor` |
+| `--healthy-label` | Value in `--group-col` that marks a healthy/control sample | `normal` |
+| `--id-map` | Optional CSV mapping probe/feature IDs to gene symbols (e.g. a GEO platform annotation file) | *(none)* |
 | `--id-map-id-col` | Column in `--id-map` holding the original probe/feature ID | `ID` |
-| `--id-map-symbol-col` | Column in `--id-map` holding the gene symbol | `Gene Symbol` |
-| `--id-map-agg` | How to aggregate multiple probes mapping to the same gene symbol (`mean`/`median`/`max`) | `mean` |
+| `--id-map-symbol-col` | Column in `--id-map` holding the gene symbol to map to | `Gene Symbol` |
+| `--id-map-agg` | How to aggregate multiple probes mapping to the same gene symbol: `mean`, `median`, or `max` | `mean` |
+
+**DEG calling thresholds**
+
+| Flag | Description | Default |
+|---|---|---|
 | `--fc-cutoff` | Absolute log2 fold-change cutoff for calling a gene a DEG | `1.0` |
 | `--pval-cutoff` | Adjusted p-value cutoff for calling a gene a DEG | `0.05` |
 | `--corr-pval-cutoff` | P-value cutoff for calling a co-expression pair significant | `0.05` |
+
+**GO enrichment**
+
+| Flag | Description | Default |
+|---|---|---|
 | `--skip-go` | Skip the GO enrichment step (e.g. no internet access) | off |
-| `--gene-sets` | gseapy/Enrichr gene-set library to use | `GO_Biological_Process_2021` |
+| `--gene-sets` | `gseapy`/Enrichr gene-set library to use | `GO_Biological_Process_2021` |
 | `--organism` | Organism passed to `gseapy.enrichr` | `human` |
+
+**Output**
+
+| Flag | Description | Default |
+|---|---|---|
 | `--outdir` | Directory where all output files are written | `deg_output` |
+| `--dump-all-frames` | Also dump every intermediate DataFrame the pipeline computes (not just the curated reports) as CSVs under `<outdir>/all_dataframes/` | off |
 | `-v`, `--verbose` | Enable verbose (DEBUG) logging | off |
-
----
-
-## Statistical Methodology
-
-**Fold change and significance.** For every gene, log2 fold change is computed from the group means (directly, if the data is already log-transformed; via a `log2` ratio with a small epsilon safeguard against division by zero, if the data is on a raw linear scale), and significance is assessed with a two-sample Welch's t-test (unequal variances assumed, no equal-variance assumption imposed on the two groups).
-
-**Multiple-testing correction.** Raw p-values are adjusted with the Benjamini-Hochberg procedure, implemented directly with NumPy rather than pulled from a statistics package, to control the false discovery rate across all genes tested simultaneously.
-
-**Classification.** A gene is called a DEG only if it clears both the fold-change cutoff (`--fc-cutoff`, log2 scale) and the adjusted p-value cutoff (`--pval-cutoff`) - genes that miss either threshold are labeled `equally-expressed`.
-
-**Co-expression.** For every DEG pair (one up-regulated, one down-regulated), the Pearson correlation is computed across the diseased samples only, with the matching p-value obtained analytically from the correlation's t-distribution rather than from repeated calls to a hypothesis-testing function. Pairs are kept only if the correlation is statistically significant (`--corr-pval-cutoff`), and split into positive ("similar") and negative ("different") co-expression patterns.
-
-**GO enrichment** is run as three independent Enrichr queries - up-regulated genes only, down-regulated genes only, and all DEGs together - so the biological processes implicated by each direction of change can be compared side by side.
 
 ---
 
@@ -220,70 +187,72 @@ python deg_analysis.py --help
 
 ```
 .
-├── deg_analysis.py       # Main pipeline script (single entry point)
-├── requirements.txt      # One-command dependency installation
-├── README.md             # This file
-└── deg_output/            # Generated: reports, plots, and GO enrichment results (created after a run)
+├── deg_analysis.py     # Main pipeline script (single entry point)
+├── requirements.txt    # One-command dependency installation
+├── README.md           # This file
+└── <outdir>/            # Generated: volcano plot, reports, GO enrichment results
 ```
 
 ---
 
 ## Output Files
 
-Running the pipeline writes the following to `--outdir` (default `deg_output/`):
+Running the pipeline generates, under `--outdir`:
 
-- `volcano_plot.png` - fold change vs. -log10 adjusted p-value, color-coded red (over-expressed) / blue (down-expressed) / grey (unchanged).
-- `deg_report.txt` - tab-separated, one line per gene: `gene`, `fold_change`, `p_value`, `adj_p_value`, `t_stat`, `change_type`.
-- `coexpression_similar.tsv` - significant positive-correlation up/down gene pairs, ranked descending by correlation.
-- `coexpression_different.tsv` - significant negative-correlation up/down gene pairs, ranked ascending by correlation (most negative first).
-- `go_enrichment_up/`, `go_enrichment_down/`, `go_enrichment_all/` - Enrichr GO Biological Process results for each gene subset (skipped entirely if `--skip-go` is set).
+- `volcano_plot.png`: fold change vs. -log10 adjusted p-value, colored by classification.
+- `deg_report.txt`: tab-separated report with one row per gene (`gene`, `fold_change`, `p_value`, `adj_p_value`, `t_stat`, `change_type`).
+- `coexpression_similar.tsv` / `coexpression_different.tsv`: significant positively-/negatively-correlated up-gene/down-gene pairs, ranked by correlation strength.
+- `go_enrichment_up/`, `go_enrichment_down/`, `go_enrichment_all/`: `gseapy`'s per-list Enrichr output folders (skipped entirely if `--skip-go` is set).
 
-**Output example (console log):**
-
-```
-[INFO] Diseased matrix shape: (54675, 60) | Healthy matrix shape: (54675, 60)
-[INFO] Detected that the expression matrix is in raw linear scale.
-[INFO] Gene regulation breakdown:
-change_type
-equally-expressed    53812
-over-expressed          421
-down-expressed          442
-[INFO] Volcano plot saved to deg_output/volcano_plot.png
-[INFO] DEG report saved to deg_output/deg_report.txt
-[INFO] Co-expression reports saved to deg_output/coexpression_similar.tsv and deg_output/coexpression_different.tsv
-[INFO] Found 187 significant similar (positive) pairs and 203 significant different (negative) pairs.
-[INFO] Done. All outputs written to /path/to/deg_output
-```
+If `--dump-all-frames` is set, `<outdir>/all_dataframes/` additionally contains: the full post-`--id-map` expression matrix, the disease and healthy sub-matrices, the full-precision (unrounded) DEG stats table, the full-precision co-expression pair tables, and each Enrichr results table (if GO enrichment ran).
 
 ---
 
-## Troubleshooting
+## Example Run
 
-**`ValueError: --id-map file is missing required column(s)... Available columns: ['ID_REF', 'GSM...', ...]`**
-You pointed `--id-map` at the expression matrix itself instead of a platform annotation file. `--id-map` needs a separate GPL annotation file with an ID column and a `Gene Symbol` column - see [Getting and cleaning a GPL annotation file](#getting-and-cleaning-a-gpl-annotation-file-common-pitfalls) above.
-
-**`pandas.errors.ParserError: ' ' expected after '"'` while loading `--id-map`**
-The raw GEO annotation file has leading `#` comment lines and/or quoted fields that trip up automatic delimiter detection. Strip the comment lines and re-save as a clean tab-separated file before passing it to `--id-map` (see the same section above for the exact command).
-
-**GO enrichment logs "succeeded but returned 0 annotations" for every gene list**
-Your expression matrix (and therefore `results["gene"]`) is still indexed by probe ID, not gene symbol - Enrichr can't match probe IDs to anything. Rerun with a working `--id-map` so genes are translated to symbols before the GO step.
+```
+(venv) PS D:\deg_analysis> python deg_analysis.py --metadata meta.csv --expression expr.csv --id-map GPL570-55999.txt --id-map-id-col ID --id-map-symbol-col "Gene Symbol" --dump-all-frames --outdir results
+01:55:35 [INFO] Loading metadata from meta.csv
+01:55:35 [INFO] Found 60 disease samples and 60 healthy samples.
+01:55:35 [INFO] Loading expression matrix from expr.csv
+01:55:35 [INFO] Loading gene ID mapping from GPL570-55999.txt
+01:55:36 [INFO] Loaded 45782 probe/feature ID -> gene symbol mappings.
+01:55:36 [WARNING] Dropped 8893/54675 rows with no gene symbol in --id-map.
+01:55:36 [INFO] Collapsed 45782 probes mapping to duplicate gene symbols into 23520 unique genes using 'mean' aggregation.
+01:55:36 [INFO] Diseased matrix shape: (23520, 60) | Healthy matrix shape: (23520, 60)
+01:55:39 [INFO] Detected that the expression matrix is ALREADY log-transformed.
+01:55:40 [INFO] Gene regulation breakdown:
+change_type
+equally-expressed    22654
+down-expressed         577
+over-expressed         289
+01:55:40 [INFO] Volcano plot saved to results\volcano_plot.png
+01:55:40 [INFO] DEG report saved to results\deg_report.txt
+01:55:41 [INFO] Co-expression reports saved to results\coexpression_similar.tsv and results\coexpression_different.tsv
+01:55:41 [INFO] Found 5106 significant similar (positive) pairs and 54331 significant different (negative) pairs.
+01:55:41 [INFO] Sending profiles to Enrichr API: 289 up, 577 down genes...
+01:55:43 [INFO] Success: up pathway processing saved. Found 1607 annotations.
+01:55:48 [INFO] Success: down pathway processing saved. Found 2893 annotations.
+01:55:54 [INFO] Success: all pathway processing saved. Found 3438 annotations.
+01:55:57 [INFO] Done. All outputs written to D:\deg_analysis\results
+01:55:57 [INFO] All intermediate dataframes dumped to D:\deg_analysis\results\all_dataframes
+```
 
 ---
 
 ## Notes and Limitations
 
-- There is no default `--metadata`/`--expression` dataset bundled with this tool; both are always required.
-- **GO enrichment requires gene symbols, not probe IDs.** If your expression matrix is indexed by microarray probe/feature ID (common for Affymetrix platforms), GO enrichment will silently return 0 annotations unless you map probes to gene symbols first with `--id-map` - see [A note on gene identifiers and GO enrichment](#a-note-on-gene-identifiers-and-go-enrichment). The pipeline detects likely probe IDs and warns if `--id-map` isn't supplied, and flags any Enrichr call that comes back with 0 annotations regardless.
-- The script auto-detects whether the expression matrix is already log-transformed (max value < 25) and adjusts the fold-change formula accordingly - double-check this against your actual data if your values happen to fall near that boundary.
-- The GO enrichment step depends on the public Enrichr API being reachable; it fails gracefully per gene list (logs a warning, moves on) rather than crashing the whole run, but you'll still need `--skip-go` for fully offline use.
-- Co-expression significance uses an analytic p-value derived from the correlation's t-distribution rather than a permutation test - this is the standard approach for Pearson correlation but assumes approximately normally distributed residuals.
-- This tool is intended for research and educational purposes and does **not** constitute clinical or diagnostic advice.
+- No dedicated DEG-calling package is used: fold change, Welch's t-test, and the Benjamini-Hochberg correction are all implemented from scratch with NumPy/SciPy.
+- The pipeline auto-detects whether the expression matrix is already log-transformed by checking the maximum value (below 25 is treated as already logged); double-check the logged `[INFO]` line matches your data if this matters for your analysis.
+- Co-expression p-values are derived analytically from the Pearson correlation's t-distribution, not via permutation, so results assume the standard parametric assumptions hold.
+- GO enrichment requires an internet connection and depends on the Enrichr API's availability; use `--skip-go` to run fully offline.
+- If your gene index is probe/feature IDs rather than gene symbols, GO enrichment will silently return 0 annotations unless you supply `--id-map`, see [A note on gene identifiers and GO enrichment](#a-note-on-gene-identifiers-and-go-enrichment).
+- This tool is intended for research and educational purposes and does **not** constitute medical or diagnostic advice.
 
 ---
+
 ## Acknowledgements
-
-This pipeline was originally developed as a term project for the **CIT672: Programming for Bioinformatics** course at **Nile University**. 
-
+This pipeline was originally developed as a term project for the **CIT672: Programming for Bioinformatics** course at **Nile University**.
 ### Group (A) Members
 1. [Akram Nader Salah](https://github.com/akramnader289)
 2. [Mariam Mohamed Mahdy](https://github.com/MariamMahdy)
@@ -292,11 +261,11 @@ This pipeline was originally developed as a term project for the **CIT672: Progr
 
 **Project Topic:** *Differentially Expressed Genes (DEG) Analysis for Lung Cancer and Gene Ontology (GO) Enrichment*
 
-> Thank you to everyone in the group for their collaboration, dedication, and shared efforts throughout this project. 
-
-> A special thanks to our course instructor, **Dr. Ibrahim Mohamed Youssef**, for his guidance, effort, and support during the course. 
+> Thank you to everyone in the group for their collaboration, dedication, and shared efforts throughout this project.
+> A special thanks to our course instructor, **Dr. Ibrahim Mohamed Youssef**, for his guidance, effort, and support during the course.
 
 ---
+
 ## License
 
-This project is released under the [MIT License](https://opensource.org/licenses/MIT).
+No license has been specified for this project yet. If you plan to share or reuse this code, add a `LICENSE` file (e.g. [MIT](https://opensource.org/licenses/MIT)) to make the terms explicit.
