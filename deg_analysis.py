@@ -533,10 +533,36 @@ def save_coexpression_reports(similar_df, different_df, outdir):
 
 
 # --------------------------------------------------------------------------- #
+# --dump-all-frames: write every DataFrame produced during the run
+# --------------------------------------------------------------------------- #
+def dump_dataframe(df, name, dump_dir, keep_index=True):
+    """Write `df` to <dump_dir>/<name>.csv, creating the directory if needed.
+
+    Used by --dump-all-frames to expose every intermediate DataFrame the
+    pipeline computes -- not just the curated, rounded reports -- so users
+    can do their own downstream analysis (e.g. the post-ID-mapping
+    expression matrix, the disease/healthy sub-matrices, or the full,
+    unrounded stats table) without re-running the pipeline by hand.
+    """
+    os.makedirs(dump_dir, exist_ok=True)
+    path = os.path.join(dump_dir, f"{name}.csv")
+    df.to_csv(path, index=keep_index)
+    logger.info("Dumped dataframe '%s' -> %s", name, path)
+    return path
+
+
+# --------------------------------------------------------------------------- #
 # Step 8: GO enrichment
 # --------------------------------------------------------------------------- #
-def run_go_enrichment(results, outdir, gene_sets, organism, sleep_seconds=3):
-    """Run GO Biological Process enrichment for up-only, down-only, and all DEGs."""
+def run_go_enrichment(results, outdir, gene_sets, organism, sleep_seconds=3,
+                       dump_dir=None):
+    """Run GO Biological Process enrichment for up-only, down-only, and all DEGs.
+
+    If `dump_dir` is given (via --dump-all-frames), each Enrichr results
+    table is also written there as go_enrichment_<label>.csv, alongside
+    gseapy's own per-list output folder, so all GO results end up in one
+    consistent place with the rest of the pipeline's dumped frames.
+    """
     import gseapy as gp  # imported lazily so --skip-go doesn't require it installed
 
     up_genes = results[results["change_type"] == "over-expressed"]["gene"].tolist()
@@ -559,6 +585,9 @@ def run_go_enrichment(results, outdir, gene_sets, organism, sleep_seconds=3):
                 no_plot=True,
             )
             n_annotations = len(enr.results)
+            if dump_dir is not None and n_annotations > 0:
+                dump_dataframe(enr.results, f"go_enrichment_{label}", dump_dir,
+                                keep_index=False)
             if n_annotations == 0:
                 logger.warning(
                     "%s -> Enrichr call succeeded but returned 0 annotations. "
@@ -635,6 +664,15 @@ def build_arg_parser():
     out_group = parser.add_argument_group("Output")
     out_group.add_argument("--outdir", default="deg_output",
                             help="Directory where all output files are written.")
+    out_group.add_argument("--dump-all-frames", action="store_true",
+                            help="Also dump every DataFrame the pipeline computes "
+                                 "(not just the curated, rounded reports) as plain "
+                                 "CSVs under <outdir>/all_dataframes/: the full "
+                                 "expression matrix (post --id-map, if used), the "
+                                 "disease and healthy sub-matrices, the full-"
+                                 "precision (unrounded) DEG stats table, the full-"
+                                 "precision co-expression pair tables, and (if GO "
+                                 "enrichment ran) each Enrichr results table.")
 
     parser.add_argument("-v", "--verbose", action="store_true",
                          help="Enable verbose (DEBUG) logging.")
@@ -656,14 +694,19 @@ def main(argv=None):
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
 
     os.makedirs(args.outdir, exist_ok=True)
+    dump_dir = os.path.join(args.outdir, "all_dataframes") if args.dump_all_frames else None
 
     # Step 1: load data
-    _, disease_df, healthy_df = load_data(
+    expression_df, disease_df, healthy_df = load_data(
         args.metadata, args.expression, args.sample_col, args.group_col,
         args.disease_label, args.healthy_label,
         id_map_path=args.id_map, id_map_id_col=args.id_map_id_col,
         id_map_symbol_col=args.id_map_symbol_col, id_map_agg=args.id_map_agg,
     )
+    if dump_dir is not None:
+        dump_dataframe(expression_df, "expression_matrix_full", dump_dir)
+        dump_dataframe(disease_df, "expression_disease_group", dump_dir)
+        dump_dataframe(healthy_df, "expression_healthy_group", dump_dir)
 
     # Step 2: fold change + t-test
     results = calculate_stats(disease_df, healthy_df)
@@ -677,6 +720,10 @@ def main(argv=None):
 
     counts = results["change_type"].value_counts()
     logger.info("Gene regulation breakdown:\n%s", counts.to_string())
+
+    if dump_dir is not None:
+        # Unrounded, full-precision version of what deg_report.txt saves.
+        dump_dataframe(results, "deg_stats_full", dump_dir, keep_index=False)
 
     # Step 5: volcano plot
     volcano_path = os.path.join(args.outdir, "volcano_plot.png")
@@ -695,14 +742,20 @@ def main(argv=None):
                 "significant different (negative) pairs.",
                 len(similar_df), len(different_df))
 
+    if dump_dir is not None:
+        dump_dataframe(similar_df, "coexpression_similar_full", dump_dir, keep_index=False)
+        dump_dataframe(different_df, "coexpression_different_full", dump_dir, keep_index=False)
+
     # Step 8: GO enrichment
     if args.skip_go:
         logger.info("Skipping GO enrichment (--skip-go).")
     else:
         run_go_enrichment(results, args.outdir, gene_sets=[args.gene_sets],
-                           organism=args.organism)
+                           organism=args.organism, dump_dir=dump_dir)
 
     logger.info("Done. All outputs written to %s", os.path.abspath(args.outdir))
+    if dump_dir is not None:
+        logger.info("All intermediate dataframes dumped to %s", os.path.abspath(dump_dir))
 
 
 if __name__ == "__main__":
