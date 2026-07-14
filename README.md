@@ -285,10 +285,10 @@ Your expression matrix (and therefore `results["gene"]`) is still indexed by pro
 This pipeline was originally developed as a term project for the **CIT672: Programming for Bioinformatics** course at **Nile University**. 
 
 ### Group (A) Members
-1. **Akram Nader Salah**
-2. **Mariam Mohamed Mahdy**
-3. **Ala'a Ahmed Fathallah**
-4. **Mohammed Fouad Mohammed**
+1. [Akram Nader Salah](https://github.com/akramnader289)
+2. [Mariam Mohamed Mahdy](https://github.com/MariamMahdy)
+3. [Ala'a Ahmed Fathallah](https://github.com/AlaaAzzam2311)
+4. [Mohammed Fouad Mohammed](https://github.com/Mohaammed-Fouad)
 
 **Project Topic:** *Differentially Expressed Genes (DEG) Analysis for Lung Cancer and Gene Ontology (GO) Enrichment*
 
