@@ -268,4 +268,4 @@ This pipeline was originally developed as a term project for the **CIT672: Progr
 
 ## License
 
-No license has been specified for this project yet. If you plan to share or reuse this code, add a `LICENSE` file (e.g. [MIT](https://opensource.org/licenses/MIT)) to make the terms explicit.
+This project is released under the [MIT License](https://opensource.org/licenses/MIT).
